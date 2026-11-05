@@ -1,0 +1,20 @@
+[
+ {
+  "directory": "C:/msys64/home/tem/tkv",
+  "arguments": [
+   "gcc",
+   "-Iinclude",
+   "-IC:/msys64/usr/local/include",
+   "-std=c11",
+   "-O2",
+   "-Wall",
+   "-Wextra",
+   "-MMD",
+   "-c",
+   "src/tkv.c",
+   "-o",
+   "build/tkv.o"
+  ],
+  "file": "src/tkv.c"
+ }
+]

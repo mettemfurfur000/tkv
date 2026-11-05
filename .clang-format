@@ -1,0 +1,17 @@
+BasedOnStyle: Microsoft
+PackConstructorInitializers: Never
+AlignArrayOfStructures: Right
+PointerAlignment: Right
+IndentWidth:     4
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterControlStatement: Always
+  AfterCaseLabel:  true
+  AfterClass:      true
+  AfterEnum:       true
+  AfterExternBlock: true
+  AfterFunction:   true
+  AfterNamespace:  true
+  AfterObjCDeclaration: true
+  AfterStruct:     true
+  AfterUnion:      true

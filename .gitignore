@@ -1,0 +1,9 @@
+build/*
+obj/*
+lua/*
+gmon.out
+out*
+.env/*
+# .vscode/*
+# .cache/*
+.*/*
