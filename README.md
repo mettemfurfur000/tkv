@@ -8,6 +8,7 @@ storage, nested objects, and stream I/O.
 ```sh
 make -C /path/to/temlib install
 make
+make test
 make install
 ```
 
@@ -20,6 +21,15 @@ when temlib is installed elsewhere:
 make -C /path/to/temlib install PREFIX=/path/to/temlib/prefix
 make TEMLIB_PREFIX=/path/to/temlib/prefix
 ```
+
+## Source layout
+
+- `src/tkv.c` contains key encoding, value accessors, and shared value helpers.
+- `src/tkv_parse.c` parses text into TKV objects.
+- `src/tkv_serialize.c` serializes objects to text.
+- `src/tkv_object.c` creates objects and adds fields.
+- `src/tkv_stream.c` reads and writes stream data.
+- `src/tkv_internal.h` contains declarations shared only by implementation files.
 
 Consumers need both TKV and temlib headers and libraries. For example:
 

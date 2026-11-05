@@ -57,15 +57,15 @@
   1. Add enum entry in TKV_VALUE_TYPE:
      TKV_VALUE_I32,  (or replace an UNUSED slot)
   
-  2. Add conversion function in tkv.c:
+  2. Add conversion function in src/tkv.c:
      i32 tkv_value_to_i32(tkv_value value);
      void tkv_value_set_i32(tkv_value value, i32 new_val);
   
   3. Update tkv_string_to_tkv_type() to map "i32" string
   
-  4. Update parsing switch in tkv_parse_object() with new case
+  4. Update parsing switch in src/tkv_parse.c with new case
   
-  5. Update serialization switch in tkv_serialize_recursive()
+  5. Update serialization switch in src/tkv_serialize.c
   
   6. Update type name function tkv_type_name()
   

@@ -17,22 +17,35 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra
 CPPFLAGS += -Iinclude -I"$(TEMLIB_PREFIX)/include"
 CFLAGS += -MMD
 
-OBJECT := build/tkv.o
+SOURCES := \
+	src/tkv.c \
+	src/tkv_parse.c \
+	src/tkv_serialize.c \
+	src/tkv_object.c \
+	src/tkv_stream.c
+OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 STATIC_LIB := build/libtkv.a
+TEST_BIN := build/test_tkv
 
--include build/tkv.d
+-include $(OBJECTS:.o=.d)
 
 
-.PHONY: all clean install
+.PHONY: all clean install test
 
 all: $(STATIC_LIB)
 
-$(OBJECT): src/tkv.c include/tkv.h
+build/%.o: src/%.c src/tkv_internal.h include/tkv.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(STATIC_LIB): $(OBJECT)
+$(STATIC_LIB): $(OBJECTS)
 	$(AR) rcs $@ $^
+
+$(TEST_BIN): tests/test_tkv.c $(STATIC_LIB) include/tkv.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(STATIC_LIB) -L"$(TEMLIB_PREFIX)/lib" -ltemlib -lbacktrace -lz -o $@
+
+test: $(TEST_BIN)
+	./$(TEST_BIN)
 
 install: $(STATIC_LIB)
 	install -d "$(PREFIX)/include/tkv" "$(PREFIX)/lib"
