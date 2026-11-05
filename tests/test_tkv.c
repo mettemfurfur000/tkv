@@ -263,6 +263,38 @@ static int test_scratch_arena_restored_after_error(void)
 	return 1;
 }
 
+static int test_malformed_vectors_restore_arenas(void)
+{
+	static const char *source_texts[] = {
+		"{ vec3 position = (1, invalid, 3); }",
+		"{ quat orient = (1, 2, 3); }",
+	};
+
+	for (size_t i = 0; i < sizeof(source_texts) / sizeof(source_texts[0]); i++)
+	{
+		const char *source = source_texts[i];
+		arena *scratch_arena = arena_create(4096);
+		arena *object_arena = arena_create(4096);
+		u32 initial_scratch_length;
+		u32 initial_object_length;
+
+		CHECK(scratch_arena != NULL);
+		CHECK(object_arena != NULL);
+		initial_scratch_length = scratch_arena->length;
+		initial_object_length = object_arena->length;
+
+		tkv_object object = tkv_parse_object(&source, scratch_arena, object_arena);
+		int restored = object == NULL && scratch_arena->length == initial_scratch_length &&
+					   object_arena->length == initial_object_length;
+
+		arena_destroy(scratch_arena);
+		arena_destroy(object_arena);
+		CHECK(restored);
+	}
+
+	return 1;
+}
+
 static int test_malformed_nested_object_restores_arenas(void)
 {
 	static const char source_text[] = "{ tkv child = { i32 value = 1;";
@@ -304,6 +336,7 @@ int main(void)
 		{"invalid input", test_invalid_input},
 		{"unterminated object", test_unterminated_object},
 		{"scratch arena restored after error", test_scratch_arena_restored_after_error},
+		{"malformed vectors restore arenas", test_malformed_vectors_restore_arenas},
 		{"malformed nested object restores arenas", test_malformed_nested_object_restores_arenas},
 	};
 	int failures = 0;

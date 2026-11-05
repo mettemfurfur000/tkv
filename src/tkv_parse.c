@@ -2,7 +2,6 @@
 
 #include <temlib/tokenizer.h>
 
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,65 +21,109 @@ typedef struct temp_tkv_ll_node
 	tkv_key key;
 } tkv_ll_node;
 
-/*==============================================================================
-  POWER-OF-10 LOOKUP TABLE
+/* Parses text into the TKV binary layout. */
 
-  Used for converting integer values to floating-point numbers during parsing.
-  Allows handling of floating-point notation like "1e10" without full parsing.
-  Index represents the exponent (10^0, 10^1, ..., 10^18).
-===============================================================================*/
-u64 q10pow[] = {
-	10UL,
-	100UL,
-	1000UL,
-	10000UL,
-	100000UL,
-	1000000UL,
-	10000000UL,
-	100000000UL,
-	1000000000UL,
-	10000000000UL,
-	100000000000UL,
-	1000000000000UL,
-	10000000000000UL,
-	100000000000000UL,
-	1000000000000000UL,
-	10000000000000000UL,
-	100000000000000000UL,
-	1000000000000000000UL,
-	10000000000000000000UL,
-};
+static bool parse_float_component(token *value, const char **source, i32 *line, f64 *result)
+{
+	bool negative = false;
 
-/*==============================================================================
-  PARSE TKV OBJECT FROM TEXT
+	if (value->type == TOK_MINUS)
+	{
+		negative = true;
+		*value = token_next(source, line);
+	}
 
-  Parses a TKV object from text format into binary memory representation.
+	if (value->type != TOK_FLOAT && value->type != TOK_NUMBER)
+	{
+		printf("Expected a float value at %d, got '%s'\n", *line, value->text);
+		return false;
+	}
 
-  PARSING PROCESS:
-  1. Verify opening '{'
-  2. For each key-value pair:
-	 a. Read type name (bool, i64, f64, str, arr, tkv)
-	 b. Read variable name and validate (1-10 chars, alphanumeric + underscore)
-	 c. Read '=' and parse value based on type
-	 d. Store compressed key in linked list, value in scratchpad
-  3. After all pairs, serialize to binary format:
-	 - Header (node count, total size)
-	 - Keys section (compressed tkv_key structures)
-	 - Metadata section (type, state, offset for each value)
-	 - Values section (actual value data)
+	*result = value->type == TOK_FLOAT ? strtod(value->text, NULL) : (f64)value->value;
+	if (negative)
+		*result = -*result;
 
-  MEMORY LAYOUT:
-  - scratchpad_arena: Holds temporary type bytes and values during parsing
-  - heap: Temporary linked list nodes for key ordering
-  - tkv_arena: Final binary TKV object
+	return true;
+}
 
-  TO ADD A NEW TYPE (e.g., i32):
-  1. Add case in value parsing switch (line ~470)
-  2. Allocate storage on scratchpad and update values_size_bytes
-  3. Add corresponding case in serialization switch (line ~700)
-  4. Update tkv_string_to_tkv_type() to map the string
-  5. Add conversion functions in header
-===============================================================================*/
+static bool parse_vector_components(token value, const char **source, i32 *line, f32 *components, u8 count)
+{
+	if (value.type != TOK_BRACKET_LEFT)
+	{
+		printf("Expected a '(' at %d, got '%s'\n", *line, value.text);
+		return false;
+	}
+
+	for (u8 i = 0; i < count; i++)
+	{
+		value = token_next(source, line);
+		f64 component;
+		if (!parse_float_component(&value, source, line, &component))
+			return false;
+		components[i] = (f32)component;
+
+		if (i + 1 < count)
+		{
+			value = token_next(source, line);
+			if (value.type != TOK_COMMA)
+			{
+				printf("Expected a comma at %d, got '%s'\n", *line, value.text);
+				return false;
+			}
+		}
+	}
+
+	value = token_next(source, line);
+	if (value.type != TOK_BRACKET_RIGHT)
+	{
+		printf("Expected a ')' at %d, got '%s'\n", *line, value.text);
+		return false;
+	}
+
+	return true;
+}
+
+static void copy_scratch_value(u8 type, u8 **scratch, u8 **destination)
+{
+	u32 size;
+	switch (type)
+	{
+#define FIXED_VALUE_SIZE(type_enum, value_type)                                                                        \
+	case TKV_VALUE_##type_enum:                                                                                         \
+		size = sizeof(value_type);                                                                                      \
+		break;
+		FIXED_VALUE_SIZE(BOOL, bool)
+		FIXED_VALUE_SIZE(I8, i8)
+		FIXED_VALUE_SIZE(I16, i16)
+		FIXED_VALUE_SIZE(I32, i32)
+		FIXED_VALUE_SIZE(I64, i64)
+		FIXED_VALUE_SIZE(U8, u8)
+		FIXED_VALUE_SIZE(U16, u16)
+		FIXED_VALUE_SIZE(U32, u32)
+		FIXED_VALUE_SIZE(U64, u64)
+		FIXED_VALUE_SIZE(F32, f32)
+		FIXED_VALUE_SIZE(F64, f64)
+		FIXED_VALUE_SIZE(VEC3, vec3)
+		FIXED_VALUE_SIZE(QUAT, quaternion)
+#undef FIXED_VALUE_SIZE
+	case TKV_VALUE_STR:
+		size = strlen((char *)*scratch) + 1;
+		break;
+	case TKV_VALUE_ARR:
+		size = 2 * sizeof(u16) + (u32)*(u16 *)*scratch * *(u16 *)(*scratch + sizeof(u16));
+		break;
+	case TKV_VALUE_TKV:
+		size = sizeof(tkv_object);
+		break;
+	default:
+		assert(0 && "Unknown tkv type");
+		return;
+	}
+
+	memcpy(*destination, *scratch, size);
+	*scratch += size;
+	*destination += size;
+}
 
 tkv_object tkv_parse_object(const char **tkv_source, arena *scratchpad_arena, arena *tkv_arena)
 {
@@ -268,32 +311,9 @@ tkv_object tkv_parse_object(const char **tkv_source, arena *scratchpad_arena, ar
 			break;
 		case TKV_VALUE_F32:;
 		case TKV_VALUE_F64:;
-			bool float_is_negative = false;
-
-			if (tok_current.type == TOK_MINUS)
-			{
-				float_is_negative = true;
-				tok_current = token_next(&s, &line);
-			}
-
-			if (tok_current.type != TOK_FLOAT && tok_current.type != TOK_NUMBER)
-			{
-				printf("Expected a float value at %d, got \'%s\'\n", line, tok_current.text);
-				goto parse_fail;
-			}
-
 			f64 val_f64;
-			if (tok_current.type == TOK_FLOAT)
-			{
-				val_f64 = strtod(tok_current.text, NULL);
-			}
-			else if (tok_current.type == TOK_NUMBER)
-			{
-				// For integers serialized from floats (e.g., 1e10 becomes 10000000000)
-				val_f64 = (f64)tok_current.value;
-			}
-			if (float_is_negative)
-				val_f64 = -val_f64;
+			if (!parse_float_component(&tok_current, &s, &line, &val_f64))
+				goto parse_fail;
 
 			switch (tkv_type)
 			{
@@ -376,124 +396,18 @@ tkv_object tkv_parse_object(const char **tkv_source, arena *scratchpad_arena, ar
 
 			break;
 		case TKV_VALUE_VEC3:;
-			if (tok_current.type != TOK_BRACKET_LEFT)
-			{
-				printf("Expected a \'(\' at %d, got \'%s\'\n", line, tok_current.text);
-				goto parse_fail;
-			}
-
 			f32 vec3_components[3] = {0};
-
-			for (i32 i = 0; i < 3; i++)
-			{
-				tok_current = token_next(&s, &line);
-
-				bool is_negative = false;
-
-				if (tok_current.type == TOK_MINUS)
-				{
-					is_negative = true;
-					tok_current = token_next(&s, &line);
-				}
-
-				if (tok_current.type != TOK_FLOAT && tok_current.type != TOK_NUMBER)
-				{
-					printf("Expected a float value at %d, got \'%s\'\n", line, tok_current.text);
-					goto parse_fail;
-				}
-
-				if (tok_current.type == TOK_FLOAT)
-				{
-					vec3_components[i] = (f32)strtod(tok_current.text, NULL);
-				}
-				else if (tok_current.type == TOK_NUMBER)
-				{
-					vec3_components[i] = (f32)tok_current.value;
-				}
-
-				if (is_negative)
-					vec3_components[i] = -vec3_components[i];
-
-				if (i < 2)
-				{
-					tok_current = token_next(&s, &line);
-					if (tok_current.type != TOK_COMMA)
-					{
-						printf("Expected a comma at %d, got \'%s\'\n", line, tok_current.text);
-						goto parse_fail;
-					}
-				}
-			}
-
-			tok_current = token_next(&s, &line);
-
-			if (tok_current.type != TOK_BRACKET_RIGHT)
-			{
-				printf("Expected a \')\' at %d, got \'%s\'\n", line, tok_current.text);
+			if (!parse_vector_components(tok_current, &s, &line, vec3_components, 3))
 				goto parse_fail;
-			}
 
 			SCRATCH_ADD(vec3, *(vec3 *)vec3_components);
 			values_size_bytes += tkv_type_length_flat(TKV_VALUE_VEC3);
 			break;
 
 		case TKV_VALUE_QUAT:;
-			if (tok_current.type != TOK_BRACKET_LEFT)
-			{
-				printf("Expected a \'(\' at %d, got \'%s\'\n", line, tok_current.text);
-				goto parse_fail;
-			}
-
 			f32 quat_components[4] = {0};
-
-			for (i32 i = 0; i < 4; i++)
-			{
-				tok_current = token_next(&s, &line);
-
-				bool is_negative = false;
-
-				if (tok_current.type == TOK_MINUS)
-				{
-					is_negative = true;
-					tok_current = token_next(&s, &line);
-				}
-
-				if (tok_current.type != TOK_FLOAT && tok_current.type != TOK_NUMBER)
-				{
-					printf("Expected a float value at %d, got \'%s\'\n", line, tok_current.text);
-					goto parse_fail;
-				}
-
-				if (tok_current.type == TOK_FLOAT)
-				{
-					quat_components[i] = (f32)strtod(tok_current.text, NULL);
-				}
-				else if (tok_current.type == TOK_NUMBER)
-				{
-					quat_components[i] = (f32)tok_current.value;
-				}
-
-				if (is_negative)
-					quat_components[i] = -quat_components[i];
-
-				if (i < 3)
-				{
-					tok_current = token_next(&s, &line);
-					if (tok_current.type != TOK_COMMA)
-					{
-						printf("Expected a comma at %d, got \'%s\'\n", line, tok_current.text);
-						goto parse_fail;
-					}
-				}
-			}
-
-			tok_current = token_next(&s, &line);
-
-			if (tok_current.type != TOK_BRACKET_RIGHT)
-			{
-				printf("Expected a \')\' at %d, got \'%s\'\n", line, tok_current.text);
+			if (!parse_vector_components(tok_current, &s, &line, quat_components, 4))
 				goto parse_fail;
-			}
 
 			SCRATCH_ADD(quaternion, *(quaternion *)quat_components);
 			values_size_bytes += tkv_type_length_flat(TKV_VALUE_QUAT);
@@ -582,67 +496,8 @@ tkv_object tkv_parse_object(const char **tkv_source, arena *scratchpad_arena, ar
 		u8 type = *scratch_ptr;
 		scratch_ptr += sizeof(u8);
 
-		u32 value_size = 0;
 		u32 value_offset = (u32)(values_write_ptr - tkv_start);
-
-#define TKV_SWITCH_WRITE(type_enum, type)                                                                              \
-	case TKV_VALUE_##type_enum:                                                                                        \
-		value_size = sizeof(type);                                                                                     \
-		memcpy(values_write_ptr, scratch_ptr, value_size);                                                             \
-		scratch_ptr += value_size;                                                                                     \
-		values_write_ptr += value_size;                                                                                \
-		break;
-
-		switch (type)
-		{
-			TKV_SWITCH_WRITE(BOOL, bool)
-
-			TKV_SWITCH_WRITE(I8, i8)
-			TKV_SWITCH_WRITE(I16, i16)
-			TKV_SWITCH_WRITE(I32, i32)
-			TKV_SWITCH_WRITE(I64, i64)
-
-			TKV_SWITCH_WRITE(U8, u8)
-			TKV_SWITCH_WRITE(U16, u16)
-			TKV_SWITCH_WRITE(U32, u32)
-			TKV_SWITCH_WRITE(U64, u64)
-
-			TKV_SWITCH_WRITE(F32, f32)
-			TKV_SWITCH_WRITE(F64, f64)
-
-		case TKV_VALUE_STR:;
-			u32 str_len = strlen((char *)scratch_ptr) + 1;
-			value_size = str_len;
-			memcpy(values_write_ptr, scratch_ptr, str_len);
-			scratch_ptr += str_len;
-			values_write_ptr += str_len;
-			break;
-
-		case TKV_VALUE_ARR:;
-			u16 element_size = *(u16 *)scratch_ptr;
-			u16 array_length = *(u16 *)(scratch_ptr + sizeof(u16));
-			value_size = 2 * sizeof(u16) + element_size * array_length;
-			memcpy(values_write_ptr, scratch_ptr, value_size);
-			scratch_ptr += value_size;
-			values_write_ptr += value_size;
-			break;
-
-			TKV_SWITCH_WRITE(VEC3, vec3)
-			TKV_SWITCH_WRITE(QUAT, quaternion)
-
-		case TKV_VALUE_TKV:;
-			// Read the pointer to the child TKV object that was stored on the scratchpad
-			tkv_object child_ptr = *(tkv_object *)scratch_ptr;
-			value_size = sizeof(tkv_object);
-			memcpy(values_write_ptr, &child_ptr, value_size);
-			scratch_ptr += value_size;
-			values_write_ptr += value_size;
-			break;
-
-		default:
-			assert(0 && "Unknown tkv type");
-			break;
-		}
+		copy_scratch_value(type, &scratch_ptr, &values_write_ptr);
 
 		// Write metadata
 		tkv_value_meta meta = {
