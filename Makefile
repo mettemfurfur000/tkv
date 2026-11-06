@@ -26,11 +26,15 @@ SOURCES := \
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 STATIC_LIB := build/libtkv.a
 TEST_BIN := build/test_tkv
+BENCH_BIN := build/bench_tkv
+BENCH_ITERATIONS ?= 10000
+BENCH_FIELDS ?= 128
+BENCH_SEED ?= 1
 
 -include $(OBJECTS:.o=.d)
 
 
-.PHONY: all clean install test
+.PHONY: all clean install test benchmark
 
 all: $(STATIC_LIB)
 
@@ -44,8 +48,14 @@ $(STATIC_LIB): $(OBJECTS)
 $(TEST_BIN): tests/test_tkv.c $(STATIC_LIB) include/tkv.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(STATIC_LIB) -L"$(TEMLIB_PREFIX)/lib" -ltemlib -lbacktrace -lz -o $@
 
+$(BENCH_BIN): benchmarks/bench_tkv.c $(STATIC_LIB) include/tkv.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(STATIC_LIB) -L"$(TEMLIB_PREFIX)/lib" -ltemlib -lbacktrace -lz -lcjson -o $@
+
 test: $(TEST_BIN)
 	./$(TEST_BIN)
+
+benchmark: $(BENCH_BIN)
+	./$(BENCH_BIN) $(BENCH_ITERATIONS) $(BENCH_FIELDS) $(BENCH_SEED)
 
 install: $(STATIC_LIB)
 	install -d "$(PREFIX)/include/tkv" "$(PREFIX)/lib"
