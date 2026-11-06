@@ -1,6 +1,7 @@
 #include "tkv.h"
 
 #include <temlib/data_io.h>
+#include <temlib/error.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -224,6 +225,39 @@ static int test_invalid_input(void)
 	return 1;
 }
 
+static int test_parse_errors_are_collected_and_reset(void)
+{
+	static const char invalid_text[] = "{ vec3 position = (1, invalid, 3); }";
+	static const char missing_semicolon_text[] = "{ i32 value = 1 }";
+	static const char valid_text[] = "{}";
+	const char *source = invalid_text;
+	arena *object_arena = arena_create(4096);
+	tkv_object object;
+
+	CHECK(object_arena != NULL);
+	error_clear();
+
+	object = tkv_parse_object_once(&source, object_arena);
+	CHECK(object == NULL);
+	CHECK(error_amount() == 1);
+	CHECK(strcmp(error_cache[0].function_name, "parse_float_component") == 0);
+
+	source = missing_semicolon_text;
+	object = tkv_parse_object_once(&source, object_arena);
+	CHECK(object == NULL);
+	CHECK(error_amount() == 2);
+	CHECK(strcmp(error_cache[0].function_name, "tkv_parse_object") == 0);
+	CHECK(strcmp(error_cache[1].function_name, "tkv_parse_object") == 0);
+
+	source = valid_text;
+	object = tkv_parse_object_once(&source, object_arena);
+	CHECK(object != NULL);
+	CHECK(error_amount() == 0);
+
+	arena_destroy(object_arena);
+	return 1;
+}
+
 static int test_unterminated_object(void)
 {
 	static const char source_text[] = "{ i32 value = 1;";
@@ -334,6 +368,7 @@ int main(void)
 		{"negative float parsing", test_negative_float_parsing},
 		{"add field and setter", test_add_field_and_setter},
 		{"invalid input", test_invalid_input},
+		{"parse errors are collected and reset", test_parse_errors_are_collected_and_reset},
 		{"unterminated object", test_unterminated_object},
 		{"scratch arena restored after error", test_scratch_arena_restored_after_error},
 		{"malformed vectors restore arenas", test_malformed_vectors_restore_arenas},

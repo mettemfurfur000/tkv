@@ -35,8 +35,32 @@ Consumers need both TKV and temlib headers and libraries. For example:
 
 ```c
 #include <tkv/tkv.h>
+#include <temlib/error.h>
 
 const char *source = "{ i64 hp = 100; str name = \"goblin\"; }";
 tkv_object object = tkv_parse_object(&source, scratch_arena, value_arena);
 i64 hp = tkv_value_to_i64(tkv_get_value(object, "hp"));
 ```
+
+## Error handling
+
+Text parsing returns `NULL` on invalid input and records details in temlib's
+shared error cache. Check the cache immediately after a failed parse, before
+starting another parse: `tkv_parse_object` clears it at the beginning of each
+call. Each entry contains the function name and message, and
+`error_amount()` gives the number of entries.
+
+```c
+#include <stdio.h>
+
+tkv_object object = tkv_parse_object(&source, scratch_arena, value_arena);
+if (object == NULL)
+{
+    for (u32 i = 0; i < error_amount(); i++)
+        fprintf(stderr, "%s reported a parse error\n", error_cache[i].function_name);
+}
+```
+
+Call `error_clear()` when you want to discard the current errors explicitly.
+Parsing errors are shared through temlib's global cache; copy or handle them
+before the next parse if they need to be retained.
